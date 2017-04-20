@@ -1,0 +1,2 @@
+# GMXworker
+Worker for Geomixer
