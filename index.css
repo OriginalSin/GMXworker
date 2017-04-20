@@ -1,0 +1,60 @@
+html, body, #map {
+	height: 100%;
+	margin: 0px;
+}
+.controls {
+	position: absolute;
+	left: 100px;
+	top: 11px;
+	z-index: 1;
+	background-color: #ffffff;
+	border-radius: 5px;
+	box-shadow: 0 1px 7px rgba(0,0,0,0.65);
+}
+
+.controls button {
+	border-radius: 5px;
+	
+}
+
+.controls > div{
+	padding: 6px;
+}
+
+.contextMenu
+{
+    position: absolute;
+    z-index: 1000000;
+    background-color: #FFFFFF;
+    /* padding: 0px 10px; */
+    border: 1px solid #DDDDDD;
+    /* width: 120px; */
+}
+
+.contextMenuItem
+{
+    padding: 3px 10px;
+    white-space: nowrap;
+    cursor: pointer;
+	white-space:nowrap;
+}
+.contextMenuItem:hover {
+    background-color: #e5e5e5;
+}
+
+.contextMenuItem span.buttonLink
+{
+	color: #293D6B;
+}
+.contextMenuItem span.buttonLinkHover
+{
+	color: #fc830b;
+}
+
+.contextMenuSeparator
+{
+	border-bottom: 1px solid #999999
+}
+.mapTree-container {
+	border: 1px solid transparent;
+}
