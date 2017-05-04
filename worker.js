@@ -6,30 +6,85 @@ var defaults = {
 
 
 self.onmessage = function(e) {
-	var mess = e.data,
-		cmd = mess ? mess.cmd : '';
+	var mess = e.data;
 	// console.log('worker', location.protocol, self.Promise, self.fetch, mess);
-	if (cmd === 'getMapProperties') {
-		mapUtils.loadMapProperties(mess).then(function(mapTree) {
-			mapUtils.iterateMapTree(mapTree, mess);
-			self.postMessage({ cmd: cmd, id: mess.id, res: mapTree });
-// console.log('loadMapProperties', mapTree);
-		});
-	} else if (cmd === 'getSessionKey') {
-		mapUtils.requestSessionKey(mess).then(function(sKey) {
-			self.postMessage({ cmd: cmd, id: mess.id, res: sKey });
-		});
+	if (mess && mess.id) {
+		var cmd = mess.cmd || '',
+			id = mess.id;
+		mapUtils._waitCmdHash[id] = {
+			inp: mess
+		};
+		if (cmd === 'getMapProperties') {
+			mapUtils.loadMapProperties(mess).then(function(mapTree) {
+				// mess.promiseArr = [];
+				// var promise = mapUtils.iterateMapTree(mapTree, mess);
+				// mess.promiseArr.push(promise);
+				Promise.all(mapUtils.iterateMapTree(mapTree, mess)).then(function() {
+					self.postMessage({ cmd: cmd, id: id, res: {mapTree: mapTree, visible: mapUtils._waitCmdHash[id].visible} });
+console.log('Promise.all', id, mapUtils._waitCmdHash[id], mess.promiseArr);
+					delete mapUtils._waitCmdHash[id];
+				});
+	// console.log('loadMapProperties', mapTree);
+			});
+		} else if (cmd === 'getSessionKey') {
+			mapUtils.requestSessionKey(mess).then(function(sKey) {
+				self.postMessage({ cmd: cmd, id: id, res: sKey });
+				// delete mapUtils._waitCmdHash[id];
+			});
+		}
 	}
-	
 };
 
 // var ab = new ArrayBuffer(100);
 // self.postMessage({ data: ab }, [ab]);
 
 var mapUtils = {
-	_sessionKeys: {},
-	_maps: {},
+	_promises: {
+		_sessionKeys: {},
+		_maps: {}
+	},
 	_dataManagers: {},
+	_waitCmdHash: {},
+
+    getTileAttributes: function(prop) {
+        var tileAttributeIndexes = {},
+            tileAttributeTypes = {};
+        if (prop.attributes) {
+            var attrs = prop.attributes,
+                attrTypes = prop.attrTypes || null;
+            if (prop.identityField) { tileAttributeIndexes[prop.identityField] = 0; }
+            for (var a = 0; a < attrs.length; a++) {
+                var key = attrs[a];
+                tileAttributeIndexes[key] = a + 1;
+                tileAttributeTypes[key] = attrTypes ? attrTypes[a] : 'string';
+            }
+        }
+        return {
+            tileAttributeTypes: tileAttributeTypes,
+            tileAttributeIndexes: tileAttributeIndexes
+        };
+    },
+
+	extend: function (dest) { // (Object[, Object, ...]) ->
+		var sources = Array.prototype.slice.call(arguments, 1),
+		    i, j, len, src;
+
+		for (j = 0, len = sources.length; j < len; j++) {
+			src = sources[j] || {};
+			for (i in src) {
+				if (src.hasOwnProperty(i)) {
+					dest[i] = src[i];
+				}
+			}
+		}
+		return dest;
+	},
+
+	setOptions: function (obj, options) {
+		obj.options = mapUtils.extend({}, obj.options, options);
+		return obj.options;
+	},
+
     iterateNode: function(treeInfo, callback) {
         var iterate = function(node) {
 			var arr = node.children,
@@ -48,7 +103,7 @@ var mapUtils = {
         treeInfo && iterate(treeInfo);
     },
     requestSessionKey: function(options) {
-        var keys = mapUtils._sessionKeys,
+        var keys = mapUtils._promises._sessionKeys,
 			serverHost = options.serverHost || defaults.serverHost;
 
         if (!(serverHost in keys)) {
@@ -106,7 +161,7 @@ var mapUtils = {
     },
 
 	loadMapProperties: function(options) {
-		var maps = mapUtils._maps,
+		var maps = mapUtils._promises._maps,
 			serverHost = options.hostName || options.serverHost || defaults.serverHost,
 			mapName = options.mapID;
 
@@ -140,45 +195,59 @@ var mapUtils = {
         return maps[serverHost][mapName].promise;
     },
 
-	iterateMapTree: function(mapTree, options) {
-		var maps = mapUtils._maps,
+	iterateMapTree: function(mapTree, options) {	// итерация по большому дереву
+		var maps = mapUtils._promises._maps,
 			serverHost = options.hostName || options.serverHost || defaults.serverHost,
-			flag = false;
+			serverHostPromises = maps[serverHost] || {};
+			flag = false,
+			promiseArr = [];
+
 		mapUtils.iterateNode(mapTree, function(node) {
 			var props = node.content.properties;
-if (props.GroupID === 'BvuGm52gvxHt9RZp') {
-	props.dataSource = 'T4CUM';
+if (props.GroupID === 'BvuGm52gvxHt9RZp') {	// отладка
+props.dataSource = 'T4CUM';
 }
+			var dataSource = props.dataSource || '';
 			node.gmxOptions = {
-				dataSource: props.dataSource || '',
+				dataSource: dataSource,
 				mapID: options.mapID
 			};
 			node.id = props.name || props.GroupID;
 			node.text = props.title;
 			node.children = node.content.children;
-			if (node.type === 'group' && node.gmxOptions.dataSource) {
+			if (node.type === 'group' && dataSource) {
 				if (props.expanded || props.visible) {
-console.log('aaaaaaaa', node.gmxOptions);
-					if (!maps[serverHost] || !maps[serverHost][node.gmxOptions.dataSource]) {
+					node.gmxOptions.dataSourceType = 'map';
+					if (!serverHostPromises[dataSource]) {
 						flag = true;
-						var mess1 = {mapID: node.gmxOptions.dataSource};
-						mapUtils.loadMapProperties(mess1).then(function(subMapTree) {
-							flag = mapUtils.iterateMapTree(subMapTree, mess1);
-				// console.log('loadMapProperties', mapTree);
+						promiseArr.push(new Promise(function(resolve) {
+							var options1 = {mapID: dataSource, id: options.id};
+							mapUtils.loadMapProperties(options1).then(function(subMapTree) {
+								node.children = subMapTree.children;
+								var promiseArr1 = mapUtils.iterateMapTree(subMapTree, options1);
+								Promise.all(promiseArr1).then(resolve);
+							});
+						}));
+					} else {
+						serverHostPromises[dataSource].promise.then(function(subMapTree) {
+							node.children = subMapTree.children;
 						});
-					}
+					} 
+
 				} else {
 					node.children = true;
-					// [
-						// {text: 'Extrnal map', mapID: node.gmxOptions.dataSource}
-					// ];
 				}
-				// iterate(layer.content);
-			// } else if (layer.type === 'layer') {
+			} else if (node.type === 'layer' && props.visible) {
+				mapUtils.createDataManager(node);
+				if (!mapUtils._waitCmdHash[options.id].visible) { mapUtils._waitCmdHash[options.id].visible = []; }
+				mapUtils._waitCmdHash[options.id].visible.push(node);
 			}
 		});
-console.log('iterateMapTree', flag);
-		return flag;
+		return promiseArr;
+    },
+
+	createDataManager: function(node, clearVersion) {
+		mapUtils._dataManagers[node.id] = new mapUtils.DataManager(node.content.properties, clearVersion);
     }
 };
 
@@ -200,27 +269,27 @@ mapUtils.DataManager = function(options, clearVersion) {
 
 	var _this = this;
 	this._vectorTileDataProvider = {
-		load: this._vectorTileDataProviderLoad.bind(this)
+		// load: this._vectorTileDataProviderLoad.bind(this)
 	};
 
-	this._observerTileLoader = new ObserverTileLoader(this);
-	this._observerTileLoader.on('tileload', function(event) {
-		var tile = event.tile;
-		_this._updateItemsFromTile(tile);
+	// this._observerTileLoader = new ObserverTileLoader(this);
+	// this._observerTileLoader.on('tileload', function(event) {
+		// var tile = event.tile;
+		// _this._updateItemsFromTile(tile);
 
-		if (_this._tilesTree) {
-			var treeNode = _this._tilesTree.getNode(tile.d, tile.s);
-			treeNode && treeNode.count--; //decrease number of tiles to load inside this node
-		}
-	});
+		// if (_this._tilesTree) {
+			// var treeNode = _this._tilesTree.getNode(tile.d, tile.s);
+			// treeNode && treeNode.count--; //decrease number of tiles to load inside this node
+		// }
+	// });
 
-	this._observerTileLoader.on('observertileload', function(event) {
-		var observer = event.observer;
-		if (observer.isActive()) {
-			observer.needRefresh = false;
-			observer.updateData(_this.getItems(observer.id));
-		}
-	});
+	// this._observerTileLoader.on('observertileload', function(event) {
+		// var observer = event.observer;
+		// if (observer.isActive()) {
+			// observer.needRefresh = false;
+			// observer.updateData(_this.getItems(observer.id));
+		// }
+	// });
 	this.setOptions(options);
 	if (clearVersion) {
 		this.options.LayerVersion = -1;
@@ -232,15 +301,101 @@ mapUtils.DataManager = function(options, clearVersion) {
 			return dates && unixTimeStamp >= dates.beginDate.valueOf() && unixTimeStamp < dates.endDate.valueOf();
 		});
 	}
+	// return this;
 };
+
 mapUtils.DataManager.prototype = {
-    extend: function(x, y) {
-        if (x < this.min.x) { this.min.x = x; }
-        if (x > this.max.x) { this.max.x = x; }
-        if (y < this.min.y) { this.min.y = y; }
-        if (y > this.max.y) { this.max.y = y; }
-        return this;
+    options: {
+        name: null,                         // layer ID
+		srs: '',							// geometry projection (3395 or 3857)
+        identityField: '',                  // attribute name for identity items
+        attributes: [],                     // attributes names
+        attrTypes: [],                      // attributes types
+        tiles: null,                        // tiles array for nontemporal data
+        tilesVers: null,                    // tiles version array for nontemporal data
+        LayerVersion: -1,                   // layer version
+        GeoProcessing: null,                // processing data
+        Temporal: false,                    // only for temporal data
+        TemporalColumnName: '',             // temporal attribute name
+        ZeroDate: '01.01.2008',             // 0 date string
+        TemporalPeriods: [],                // temporal periods
+        TemporalTiles: [],                  // temporal tiles array
+        TemporalVers: [],                   // temporal version array
+        hostName: 'maps.kosmosnimki.ru',    // default hostName
+        sessionKey: '',                     // session key
+        isGeneralized: false,               // flag for use generalized tiles
+        isFlatten: false                    // flag for flatten geometry
     },
+
+    setOptions: function(options) {
+        // this._clearProcessing();
+        // if (options.GeoProcessing) {
+            // this.processingTile = this.addData([]);
+            // this._chkProcessing(options.GeoProcessing);
+        // }
+        mapUtils.setOptions(this, options);
+        this.optionsLink = options;
+        this._isTemporalLayer = this.options.Temporal;
+
+        var tileAttributes = mapUtils.getTileAttributes(this.options);
+        this.tileAttributeIndexes = tileAttributes.tileAttributeIndexes;
+        this.temporalColumnType = tileAttributes.tileAttributeTypes[this.options.TemporalColumnName];
+
+        var hostName = this.options.hostName,
+            sessionKey = this.options.sessionKey;
+
+        // if (!sessionKey) {
+            // sessionKey = L.gmx.gmxSessionManager.getSessionKey(hostName);
+        // }
+        // this.tileSenderPrefix = protocol + '//' + hostName + '/' +
+            // 'TileSender.ashx?WrapStyle=None' +
+            // '&key=' + encodeURIComponent(sessionKey);
+
+        this._needCheckActiveTiles = true;
+    },
+    addLayerFilter: function(filterFunc, options) {
+        if (options && options.layerID) {
+			var	layerID = options.layerID,
+				name = options.target || 'screen';
+
+			if (!this._filtersView[layerID]) { this._filtersView[layerID] = {}; }
+			if (options.id) { name += '_' + options.id; }
+
+			this._filtersView[layerID][name] = filterFunc;
+			// this._triggerObservers(this._getObserversByFilterName(name, options.target));
+		}
+		return this;
+    },
+
+    removeLayerFilter: function(options) {
+        if (this._filtersView[options.layerID]) {
+			var	layerID = options.layerID,
+				name = options.target || 'screen';
+			if (options.id) { name += '_' + options.id; }
+
+            if (this._filtersView[layerID][name]) {
+				var oKeys = this._getObserversByFilterName(name);
+				delete this._filtersView[layerID][name];
+				// this._triggerObservers(oKeys);
+			}
+        }
+		return this;
+    },
+
+    addFilter: function(filterName, filterFunc) {
+        this._filters[filterName] = filterFunc;
+        // this._triggerObservers(this._getObserversByFilterName(filterName));
+		return this;
+    },
+
+    removeFilter: function(filterName) {
+        if (this._filters[filterName]) {
+            var oKeys = this._getObserversByFilterName(filterName);
+            delete this._filters[filterName];
+            // this._triggerObservers(oKeys);
+        }
+		return this;
+    }
 };
 // var DataManager = L.Class.extend({});
 var tt = 1;
